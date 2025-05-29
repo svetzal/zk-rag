@@ -152,6 +152,10 @@ It will then perform a full index of your vault before starting the chat.
 
 Subsequently running `zkchat` on its own will launch it on the last opened vault, with the last selected models.
 
+The CLI offers two interface modes:
+- Rich text UI (default): A two-panel layout with conversation history on top and a 5-line input area at the bottom
+- Simple text mode: A basic input/output interface (use the `--simple` flag)
+
 > If you want to allow the AI to make changes to your Zettelkasten, you must use the `--unsafe` flag. We highly recommend using `git` for version control if you enable this option.
 
 > Specifying `--git` will initialize a new git repository for your vault if one doesn't already exist.
@@ -161,6 +165,7 @@ Command-line options:
 - `--bookmark NAME`: Use a bookmarked vault path instead of specifying the path directly
 - `--add-bookmark NAME PATH`: Add a new bookmark for a vault path
 - `--remove-bookmark NAME`: Remove a bookmarked vault path
+- `--simple`: Use simple text interface instead of rich UI
 - `--list-bookmarks`: List all bookmarked vault paths
 - `--gateway {ollama,openai}`: Set the model gateway to use (ollama or openai). OpenAI requires OPENAI_API_KEY environment variable
 - `--model [model_name]`: Change the LLM model to use for chat

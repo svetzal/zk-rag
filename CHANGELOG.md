@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Next]
 
+### Added
+- Rich text UI for the CLI interface with a 2-panel layout (conversation history and input area)
+- `--simple` flag to use the traditional CLI interface instead of the Rich UI
+
 ## [2.6.1] - 2025-04-05
 
 ### Added

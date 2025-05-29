@@ -6,8 +6,15 @@ logging.basicConfig(
 
 import argparse
 import os
+import sys
 from importlib.metadata import entry_points
-from typing import List
+from typing import List, Optional, Tuple
+
+from rich.console import Console, RenderableType
+from rich.layout import Layout
+from rich.live import Live
+from rich.panel import Panel
+from rich.text import Text
 
 from mojentic.llm.gateways import OllamaGateway, OpenAIGateway
 from mojentic.llm.tools.llm_tool import LLMTool
@@ -44,7 +51,8 @@ from zk_chat.chroma_gateway import ChromaGateway
 from zk_chat.zettelkasten import Zettelkasten
 
 
-def chat(config: Config, unsafe: bool = False, use_git: bool = False, store_prompt: bool = False):
+def _setup_chat_session(config: Config, unsafe: bool = False, use_git: bool = False, store_prompt: bool = False):
+    """Set up the chat session with all necessary components."""
     # Create a single ChromaGateway instance to access multiple collections
     db_dir = os.path.join(config.vault, ".zk_chat_db")
     chroma_gateway = ChromaGateway(config.gateway, db_dir=db_dir)
@@ -148,15 +156,237 @@ About organizing the Zettelkasten:
         tools=tools
     )
 
+    return chat_session
+
+
+def chat(config: Config, unsafe: bool = False, use_git: bool = False, store_prompt: bool = False):
+    """Traditional chat interface using simple input/output."""
+    chat_session = _setup_chat_session(config, unsafe, use_git, store_prompt)
+
     while True:
         query = input("Query: ")
         if not query:
             print("Exiting...")
             break
         else:
-            # response = rag_query(chat_session, zk, query)
             response = chat_session.send(query)
             print(response)
+
+
+def rich_chat(config: Config, unsafe: bool = False, use_git: bool = False, store_prompt: bool = False):
+    """Enhanced chat interface using Rich library for a better user experience."""
+    chat_session = _setup_chat_session(config, unsafe, use_git, store_prompt)
+    
+    # Initialize conversation history
+    conversation = []
+    
+    # Create console for rendering
+    console = Console()
+    
+    # Get terminal size
+    terminal_width, terminal_height = os.get_terminal_size()
+    
+    # Create the layout
+    layout = Layout()
+    
+    # Split into chat history (top) and input area (bottom)
+    layout.split(
+        Layout(name="chat", ratio=1),
+        Layout(name="input", size=5)  # Fixed at 5 lines as per requirements
+    )
+
+    # Keep track of current input text and cursor position
+    current_input = []
+    cursor_line = 0
+    
+    def render_conversation():
+        """Render the conversation history with scrolling support."""
+        if not conversation:
+            return Panel(
+                "[dim]No messages yet. Type your query below.[/dim]", 
+                title="Chat History",
+                border_style="blue", 
+                height=None
+            )
+        
+        result = []
+        for role, message in conversation:
+            if role == "user":
+                result.append(f"[bold cyan]You:[/]\n{message}")
+            else:
+                # Handle markdown rendering for assistant responses
+                # Use Rich's Markdown for better formatting
+                result.append(f"[bold green]Assistant:[/]\n{message}")
+        
+        message_text = "\n\n".join(result)
+        
+        # Calculate visible height for the chat panel
+        visible_height = terminal_height - layout["input"].size - 4  # Account for borders and padding
+        
+        # Basic scrolling implementation
+        lines = message_text.split("\n")
+        if len(lines) > visible_height:
+            visible_lines = lines[-visible_height:]
+            message_text = "\n".join(visible_lines)
+            scroll_info = f"[dim](Showing {visible_height} of {len(lines)} lines - most recent messages)[/]"
+            return Panel(
+                f"{scroll_info}\n{message_text}", 
+                title="Chat History", 
+                border_style="blue", 
+                height=None,
+                padding=(1, 1)
+            )
+        
+        return Panel(
+            message_text, 
+            title="Chat History", 
+            border_style="blue", 
+            height=None,
+            padding=(1, 1)
+        )
+
+    def render_input_area():
+        """Render the input area with current input text."""
+        if not current_input:
+            help_text = "[bold]Enter your query below[/] [dim](Submit: Empty line, Exit: Ctrl+D or Ctrl+C)[/dim]"
+            return Panel(
+                help_text,
+                title="Input",
+                border_style="green",
+                height=None
+            )
+        
+        # Show the current input text with a cursor indicator
+        input_lines = current_input.copy()
+        
+        # Format the text with appropriate styling
+        text = Text()
+        for i, line in enumerate(input_lines):
+            if i > 0:
+                text.append("\n")
+            text.append(line)
+            
+        return Panel(
+            text,
+            title="Input",
+            border_style="green", 
+            height=None,
+            padding=(0, 1)
+        )
+
+    def update_layout():
+        """Update the layout with current content."""
+        layout["chat"].update(render_conversation())
+        layout["input"].update(render_input_area())
+
+    def process_keystroke(key: str) -> Tuple[bool, Optional[str]]:
+        """Process a keystroke and update the current input.
+        
+        Returns:
+            Tuple[bool, Optional[str]]: 
+            - First value: True if input is complete, False otherwise
+            - Second value: The final input text if complete, None otherwise
+        """
+        nonlocal current_input
+        
+        # Handle special keys
+        if key == 'ctrl+c' or key == 'ctrl+d':
+            return True, None
+        
+        if key == 'enter':
+            # If enter is pressed on an empty input or after an empty line
+            # following content, consider input complete
+            if not current_input or (current_input and current_input[-1] == ''):
+                result = '\n'.join(current_input).rstrip()
+                if not result:
+                    return True, None
+                return True, result
+            current_input.append('')
+        elif key == 'backspace':
+            if current_input and current_input[-1]:
+                current_input[-1] = current_input[-1][:-1]
+            elif len(current_input) > 1:  # Can remove empty line
+                current_input.pop()
+        else:
+            # Regular character input
+            if not current_input:
+                current_input = ['']
+            current_input[-1] += key
+            
+        return False, None
+
+    def get_input_with_live_display(live: Live) -> Optional[str]:
+        """Get multiline input while keeping the Live display active."""
+        nonlocal current_input
+        
+        # Clear any previous input
+        current_input = ['']
+        update_layout()
+        live.refresh()
+        
+        while True:
+            try:
+                # Use Rich's console input to capture a single keystroke
+                key = console.input(password=True)
+                
+                # Process the keystroke
+                is_complete, final_text = process_keystroke(key)
+                
+                # Update the display
+                update_layout()
+                live.refresh()
+                
+                if is_complete:
+                    return final_text
+                    
+            except (EOFError, KeyboardInterrupt):
+                return None
+
+    # Display initial instructions
+    console.clear()
+    console.print("[bold cyan]ZkChat Rich Interface[/]")
+    console.print("- Type your message in the input panel")
+    console.print("- Submit with an empty line")
+    console.print("- Exit with Ctrl+C or Ctrl+D")
+    console.print("\nPress Enter to start...")
+    input()
+    console.clear()
+
+    with Live(layout, console=console, screen=True, refresh_per_second=4) as live:
+        update_layout()
+        live.refresh()
+        
+        while True:
+            # Get multiline input from user while keeping panels visible
+            query = get_input_with_live_display(live)
+            
+            # Check for exit condition
+            if query is None:
+                break
+                
+            # Reset current_input for next query
+            current_input = []
+                
+            # Add user query to conversation
+            conversation.append(("user", query))
+            update_layout()
+            live.refresh()
+            
+            # Show "thinking" indicator
+            layout["input"].update(Panel("[italic]Processing...[/]", title="Status", border_style="yellow"))
+            live.refresh()
+            
+            # Get assistant response
+            response = chat_session.send(query)
+            
+            # Add assistant response to conversation
+            conversation.append(("assistant", response))
+            update_layout()
+            live.refresh()
+
+    console.clear()
+    console.print("[bold cyan]Thank you for using ZkChat![/]")
+    return
 
 
 def _add_available_plugins(tools, config: Config, llm: LLMBroker):
@@ -175,6 +405,7 @@ if __name__ == '__main__':
     parser.add_argument('--git', action='store_true', help='Enable git integration')
     parser.add_argument('--store-prompt', action='store_false', help='Store the system prompt to the vault',
                         dest='store_prompt', default=True)
+    parser.add_argument('--simple', action='store_true', help='Use simple text interface instead of rich UI')
 
     args = parser.parse_args()
 
@@ -186,4 +417,7 @@ if __name__ == '__main__':
 
     display_banner(config, title="ZkChat", unsafe=args.unsafe, use_git=args.git, store_prompt=args.store_prompt)
 
-    chat(config, unsafe=args.unsafe, use_git=args.git, store_prompt=args.store_prompt)
+    if args.simple:
+        chat(config, unsafe=args.unsafe, use_git=args.git, store_prompt=args.store_prompt)
+    else:
+        rich_chat(config, unsafe=args.unsafe, use_git=args.git, store_prompt=args.store_prompt)
